@@ -1,0 +1,10 @@
+{
+  "weights.control": [
+    "mul",
+    0.5
+  ],
+  "__risk_level__": [
+    "set",
+    "high"
+  ]
+}

@@ -1,0 +1,1 @@
+503 Server Error: Service Unavailable for url: http://127.0.0.1:11434/api/generate

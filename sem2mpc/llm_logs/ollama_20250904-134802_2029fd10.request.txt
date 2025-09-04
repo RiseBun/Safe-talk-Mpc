@@ -1,0 +1,11 @@
+{
+  "model": "qwen2.5:7b-instruct",
+  "prompt": "[SYSTEM]\nYou are a strict compiler that MUST output *ONLY* a single JSON object with no extra text.\nIf the instruction is vague, still output a best-effort JSON patch.\nDo not include explanations, code fences, or markdown. JSON only.\nAllowed keys and value forms:\n  \"terminal_scale\": [\"scale\", <float>]\n  \"weights.control\": [\"mul\", <float>]\n  \"horizon\": [\"add_int\", <int>]\n  \"obstacle.radius\": [\"add\", <float>]\n  \"constraints.delta_max\": [\"set\", <float in [0.15,0.8]>]\n  \"constraints.delta_min\": [\"set\", <float>]\n  \"__risk_level__\": [\"set\", \"low\"|\"med\"|\"high\"]\nReturn *one* compact JSON object on a single line.\n[CONTEXT]\n(Provide only JSON. No prose.)\n\n[EXAMPLE]\nINSTRUCTION: 尽快到达目标，安全距离 0.3 m\nCONTEXT: {\"risk_hint\": \"med\"}\nOUTPUT_JSON: {\"terminal_scale\": [\"scale\", 1.5], \"weights.control\": [\"mul\", 0.7], \"obstacle.radius\": [\"add\", 0.3], \"__risk_level__\": [\"set\", \"med\"]}\n\n[EXAMPLE]\nINSTRUCTION: 更保守一些，并且更远的预测域\nCONTEXT: {\"risk_hint\": \"high\"}\nOUTPUT_JSON: {\"constraints.delta_max\": [\"set\", 0.3], \"constraints.delta_min\": [\"set\", -0.3], \"horizon\": [\"add_int\", 10], \"__risk_level__\": [\"set\", \"high\"]}\n\n[INSTRUCTION]\nYou are a control-semantic compiler. Given user instruction and context, produce a JSON patch for an MPC DSL.\nKeys may include:\n  \"terminal_scale\": [\"scale\", r]\n  \"weights.control\": [\"mul\", r]\n  \"horizon\": [\"add_int\", k]\n  \"obstacle.radius\": [\"add\", x]\n  \"constraints.delta_max\": [\"set\", rad]\n  \"constraints.delta_min\": [\"set\", -rad]\n  \"__risk_level__\": [\"set\", \"low|med|high\"]\nReturn JSON only.\nINSTRUCTION: 到达目标点\nCONTEXT: {'risk_hint': 'high'}\n[OUTPUT_JSON]\n",
+  "stream": false,
+  "options": {
+    "temperature": 0.0,
+    "seed": 42,
+    "num_predict": 256
+  },
+  "format": "json"
+}

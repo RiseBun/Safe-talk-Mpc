@@ -1,0 +1,24 @@
+{
+  "start": [0.0, 0.0, 0.0, 0.0, 0.0],
+  "goal":  [2.0, 1.0, 0.0, 0.0, 0.0],
+  "horizon": 70,
+  "dt": 0.1,
+  "weights": {
+    "state": [10, 10, 1, 0.1, 0.1],
+    "control": [0.05, 0.05]
+  },
+  "terminal_scale": 3.0,
+  "constraints": {
+    "a_min": -1.0,
+    "a_max": 1.0,
+    "delta_min": -0.5,
+    "delta_max": 0.5
+  },
+  "obstacle": {
+    "center": [1.2, 0.5],
+    "radius": 0.45
+  },
+  "risk": "med",
+  "shield": {"mode": "hybrid", "weight": 8.0},
+  "insert_midpoint": true
+}

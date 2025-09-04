@@ -1,0 +1,1 @@
+{"terminal_scale": ["scale", 0.5], "weights.control": ["mul", 0.8], "obstacle.radius": ["add", 0.9], "__risk_level__": ["set", "high"]}

@@ -1,0 +1,11 @@
+```json
+{
+  "terminal_scale": ["scale", 0.4],
+  "weights.control": ["mul", 1.2], // 更保守一些，增加控制权重
+  "horizon": ["add_int", 50], // 假设增加预测 horizon 来提高安全性
+  "obstacle.radius": ["add", 0.4],
+  "constraints.delta_max": ["set", 0.3],
+  "constraints.delta_min": ["set", -0.3],
+  "__risk_level__": ["set", "high"]
+}
+```

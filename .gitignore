@@ -1,0 +1,54 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+*.egg-info/
+.installed.cfg
+*.orig
+
+# Conda
+envs/
+*.yml
+!environment.yml  # 但保留 environment.yml（重要！）
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs
+llm_logs/
+*.log
+sem2mpc/_tmp_task.json
+sem2mpc/last_patch.json
+sem2mpc/mpc_llm_anim.mp4
+sem2mpc/mpc_q7b_anim.mp4
+*.mp4
+*.png
+*.json
+!mpc_metrics.json  # 如果你想保留指标文件
+!environment.yml
+
+# Jupyter
+.ipynb_checkpoints/
+
+# OS
+.DS_Store
+Thumbs.db

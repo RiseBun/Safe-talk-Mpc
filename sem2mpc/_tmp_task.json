@@ -24,11 +24,11 @@
       0.1
     ],
     "control": [
-      0.034999999999999996,
-      0.034999999999999996
+      0.07500000000000001,
+      0.07500000000000001
     ]
   },
-  "terminal_scale": 4.5,
+  "terminal_scale": 3.0,
   "constraints": {
     "a_min": -1.0,
     "a_max": 1.0,
@@ -47,5 +47,6 @@
     "mode": "hybrid",
     "weight": 8.0
   },
-  "insert_midpoint": true
+  "insert_midpoint": true,
+  "u_rate_weight": 0.5
 }

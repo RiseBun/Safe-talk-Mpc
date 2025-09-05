@@ -1,24 +1,41 @@
 {
   "start": [0.0, 0.0, 0.0, 0.0, 0.0],
   "goal":  [2.0, 1.0, 0.0, 0.0, 0.0],
-  "horizon": 70,
-  "dt": 0.1,
+
+  "no_backtrack": { "enabled": true, "epsilon": 0.002 },
+  "speed_cap":    { "enabled": true, "d0": 1.0, "v_far": 1.20, "v_near": 0.20 },
+
+  "horizon": 160,
+  "dt": 0.08,
+
   "weights": {
-    "state": [10, 10, 1, 0.1, 0.1],
-    "control": [0.05, 0.05]
+    "state": [18, 18, 2.5, 0.1, 0.1],
+    "control": [0.08, 0.08],
+    "terminal_velocity": 30.0,
+    "terminal_steer": 3.5
   },
-  "terminal_scale": 3.0,
+
+  "u_rate_weight": 0.45,
+  "terminal_scale": 2.2,
+
+  "terminal_box": {
+    "enabled": true,
+    "half_sizes": [0.06, 0.06]
+  },
+
   "constraints": {
-    "a_min": -1.0,
-    "a_max": 1.0,
-    "delta_min": -0.5,
-    "delta_max": 0.5
+    "a_min": -1.2,
+    "a_max":  1.6,
+    "delta_min": -0.50,
+    "delta_max":  0.50,
+    "v_min": 0.0,
+    "v_max": 0.80
   },
-  "obstacle": {
-    "center": [1.2, 0.5],
-    "radius": 0.45
-  },
+
+  "obstacle": { "center": [1.2, 0.5], "radius": 0.45 },
+
   "risk": "med",
-  "shield": {"mode": "hybrid", "weight": 8.0},
-  "insert_midpoint": true
+  "shield": { "mode": "hybrid", "weight": 8.0 },
+
+  "insert_midpoint": false
 }

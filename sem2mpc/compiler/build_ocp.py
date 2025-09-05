@@ -113,26 +113,27 @@ def build_ocp(task_or_path) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     """
     构建 OCP：
       - 等式约束：初值 / 动力学离散化
-      - 不等式约束：避障 (dist^2 - r^2 >= 0，硬约束)；控制上下界
+      - 不等式约束：避障（硬/软/混合）、控制/速度上下界、距离相关限速、前向单调（不回退）
       - 代价：状态（含终端）、控制、控制变化率、终端速度/转角、终端盒松弛
     返回：
       (nlp, meta) 其中 meta 包含 N, nx, nu, obstacle, bounds(lbg, ubg)
     """
     task = apply_risk(load_task(task_or_path))
 
-    # 权重
+    # ===== 权重 =====
     w_state = _expand_state_weights(task.get('weights', {}).get('state'))
     w_ctrl = _expand_control_weights(task.get('weights', {}).get('control'))
     terminal_scale = float(task.get('terminal_scale', 3.0))
 
-    # 终端速度/转角权重（用于抑制过冲）
-    q_vf = float(task.get('weights', {}).get('terminal_vel', 2.0))
-    q_df = float(task.get('weights', {}).get('terminal_steer', 1.0))
+    # 兼容两种命名：terminal_velocity / terminal_vel
+    wdict = task.get('weights', {}) or {}
+    q_vf = float(wdict.get('terminal_velocity', wdict.get('terminal_vel', 2.0)))
+    q_df = float(wdict.get('terminal_steer', 1.0))
 
-    # 控制变化率权重（平滑控制；0 表示关闭）
+    # 控制变化率权重
     u_rate_w = float(task.get('u_rate_weight', 0.0))
 
-    # 模型 & 时间栅格
+    # ===== 模型 & 时间栅格 =====
     model = AckermannModel()     # X=[x,y,theta,v,delta], U=[a, delta_cmd]
     nx, nu = model.nx, model.nu
 
@@ -159,12 +160,12 @@ def build_ocp(task_or_path) -> Tuple[Dict[str, Any], Dict[str, Any]]:
 
     obj = 0
 
-    # 初值等式：X0 = x0
+    # ===== 初值等式：X0 = x0 =====
     g_list.append(X[:, 0] - ca.DM(x0))
     lbg += [0.0] * nx
     ubg += [0.0] * nx
 
-    # —— 中点引导（Method C），支持 left/right 绕行 —— #
+    # ===== 中点引导（Method C），支持 left/right 绕行 =====
     if task.get('insert_midpoint', True):
         mid = [(x0[0] + xf[0]) / 2.0, (x0[1] + xf[1]) / 2.0, 0.0, 0.0, 0.0]
         if side == 'left':
@@ -177,12 +178,25 @@ def build_ocp(task_or_path) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     else:
         via_points = [xf]
 
-    # 动力学 & 阶段代价
+    # ===== 读取 DSL 的机制开关（方案B）=====
+    scfg = task.get("speed_cap", {}) or {}
+    cap_enabled = bool(scfg.get("enabled", False))
+    d0    = float(scfg.get("d0", 1.5))
+    v_far = float(scfg.get("v_far", 0.8))
+    v_near= float(scfg.get("v_near", 0.12))
+
+    nbcfg = task.get("no_backtrack", {}) or {}
+    nb_enabled = bool(nbcfg.get("enabled", False))
+    eps_back   = float(nbcfg.get("epsilon", 0.002))
+
+    goal_xy = ca.DM(xf[:2])
+
+    # ===== 动力学 & 阶段代价 =====
     for k in range(N):
         xk = X[:, k]
         uk = U[:, k]
 
-        # 离散化（模型内部可为前向欧拉/更高阶）
+        # 离散化
         x_next = model.forward(xk, uk, dt)
 
         # 等式：X_{k+1} - f(X_k, U_k) = 0
@@ -190,25 +204,46 @@ def build_ocp(task_or_path) -> Tuple[Dict[str, Any], Dict[str, Any]]:
         lbg += [0.0] * nx
         ubg += [0.0] * nx
 
-        # 参考切换：前半段跟中点，后半段跟终点
+        # 参考：前半段跟中点；后半段跟终点
         ref = via_points[0] if (len(via_points) > 1 and k < N // 2) else via_points[-1]
         ref = ca.DM(ref)
 
         # 阶段代价： (x-ref)^T Q (x-ref) + u^T R u
         obj += ca.mtimes([(xk - ref).T, Q, (xk - ref)]) + ca.mtimes([uk.T, R, uk])
 
-        # 控制变化率正则： (u_k - u_{k-1})^2
+        # 控制变化率正则
         if u_rate_w > 0 and k >= 1:
             du = U[:, k] - U[:, k - 1]
             obj += u_rate_w * ca.mtimes(du.T, du)
 
-    # —— 终端代价：位置 + 终端速度/转角抑制 —— #
+        # -------- 机制1：距离相关限速（仅对 v_k 生效） --------
+        if cap_enabled:
+            pos_k = xk[0:2]
+            d = ca.norm_2(goal_xy - pos_k)
+            alpha = ca.fmin(1.0, d / d0)
+            v_cap_k = v_near + (v_far - v_near) * alpha
+            g_list.append(xk[3] - v_cap_k)   # xk[3] <= v_cap_k  -> xk[3] - v_cap_k <= 0
+            lbg.append(-ca.inf)
+            ubg.append(0.0)
+
+        # -------- 机制2：不回退（前向单调性约束） --------
+        if nb_enabled:
+            pos_k  = xk[0:2]
+            pos_k1 = X[0:2, k + 1]
+            vec_to_goal = goal_xy - pos_k
+            dir_goal = vec_to_goal / (1e-6 + ca.norm_2(vec_to_goal))
+            forward_step = ca.dot(pos_k1 - pos_k, dir_goal)
+            g_list.append(forward_step + eps_back)  # forward_step >= -eps_back
+            lbg.append(0.0)
+            ubg.append(ca.inf)
+
+    # ===== 终端代价：位置 + 终端速度/转角抑制 =====
     xN = X[:, -1]
     obj += ca.mtimes([(xN - ca.DM(xf)).T, Qf, (xN - ca.DM(xf))])
     obj += q_vf * (xN[3] ** 2) + q_df * (xN[4] ** 2)
 
-    # —— 终端盒约束（带松弛，强制“到点且停住”趋势）—— #
-    eps_pos = 0.05   # 终端盒尺寸（可调 0.05~0.1）
+    # ===== 终端盒约束（带松弛）=====
+    eps_pos = 0.05   # 终端盒尺寸（0.05~0.1 可调）
     w_box  = 50.0    # 终端盒松弛的权重
     w_vT   = 10.0    # 终端速度权重（补强）
     w_dT   = 5.0     # 终端转角权重（补强）
@@ -234,7 +269,7 @@ def build_ocp(task_or_path) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     # 终端附加代价（更强到点 + 停车）
     obj += w_box * (sx + sy) + w_vT * (X[3, -1] ** 2) + w_dT * (X[4, -1] ** 2)
 
-    # —— 避障：硬/软/混合 —— #
+    # ===== 避障：硬/软/混合 =====
     obs = task.get('obstacle', None)
     if obs:
         cx = float(obs['center'][0])
@@ -261,8 +296,8 @@ def build_ocp(task_or_path) -> Tuple[Dict[str, Any], Dict[str, Any]]:
             if use_soft:
                 obj += soft_barrier(dist2, r2, w=soft_w)
 
-    # —— 控制上下界：umin <= u <= umax —— #
-    cons = task.get('constraints', {})
+    # ===== 控制上下界：umin <= u <= umax =====
+    cons = task.get('constraints', {}) or {}
     a_min = float(cons.get('a_min', -1.0))
     a_max = float(cons.get('a_max',  +1.0))
     d_min = float(cons.get('delta_min', -0.5))
@@ -280,7 +315,23 @@ def build_ocp(task_or_path) -> Tuple[Dict[str, Any], Dict[str, Any]]:
         lbg += [0.0] * nu
         ubg += [float('inf')] * nu
 
-    # —— 打包 NLP（注意把 sx, sy 作为变量拼上）—— #
+    # ===== 速度上下界（如果在 DSL constraints 里给了 v_min/v_max）=====
+    v_min = cons.get('v_min', None)
+    v_max = cons.get('v_max', None)
+    if v_min is not None:
+        v_min = float(v_min)
+        for k in range(N + 1):
+            g_list.append(X[3, k] - v_min)  # X[3] >= v_min
+            lbg.append(0.0)
+            ubg.append(float('inf'))
+    if v_max is not None:
+        v_max = float(v_max)
+        for k in range(N + 1):
+            g_list.append(v_max - X[3, k])  # X[3] <= v_max
+            lbg.append(0.0)
+            ubg.append(float('inf'))
+
+    # ===== 打包 NLP（把 sx, sy 作为变量拼上）=====
     vars_ = ca.vertcat(
         ca.reshape(X, -1, 1),
         ca.reshape(U, -1, 1),

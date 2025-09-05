@@ -1,18 +1,21 @@
 {
-  "terminal_scale": [
-    "scale",
-    1.5
+  "_hits": [
+    "risk:high"
   ],
-  "weights.control": [
-    "mul",
-    0.7
+  "__risk_level__": [
+    "set",
+    "high"
   ],
   "obstacle.radius": [
     "add",
     0.3
   ],
-  "__risk_level__": [
+  "weights.control": [
+    "mul",
+    1.5
+  ],
+  "u_rate_weight": [
     "set",
-    "high"
+    0.5
   ]
 }

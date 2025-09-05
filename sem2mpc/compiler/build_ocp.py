@@ -12,7 +12,7 @@ def _clamp(x: float, lo: float, hi: float) -> float:
 
 
 def _pad5(v: List[float]) -> List[float]:
-    """把列表补到 5 维 [x,y,theta,v,delta]（不足补 0）"""
+    """补到 5 维 [x,y,theta,v,delta]"""
     v = list(v)
     if len(v) < 5:
         v = v + [0.0] * (5 - len(v))
@@ -20,10 +20,7 @@ def _pad5(v: List[float]) -> List[float]:
 
 
 def _expand_state_weights(w) -> List[float]:
-    """
-    输入可能是 3 维（x,y,theta）或 5 维（x,y,theta,v,delta）
-    统一扩成 5 维：末两维默认 0.1
-    """
+    """state 权重允许 3/5 维，统一为 5 维"""
     if w is None:
         return [10.0, 10.0, 1.0, 0.1, 0.1]
     w = list(w)
@@ -35,9 +32,7 @@ def _expand_state_weights(w) -> List[float]:
 
 
 def _expand_control_weights(r) -> List[float]:
-    """
-    控制权重允许是标量或向量；统一为 2 维 [a, delta]
-    """
+    """control 权重允许标量/向量，统一为 2 维 [a, delta]"""
     if r is None:
         return [0.05, 0.05]
     if isinstance(r, (int, float)):
@@ -49,9 +44,7 @@ def _expand_control_weights(r) -> List[float]:
 
 
 def apply_risk(task: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    风险自适应：调节安全半径/预测步长/终端权重/转角上限
-    """
+    """风险自适应：半径/步长/终端权重/转角界"""
     risk = task.get('risk', 'med')
     obs = task.get('obstacle') or {}
     constraints = task.setdefault('constraints', {})
@@ -67,7 +60,6 @@ def apply_risk(task: Dict[str, Any]) -> Dict[str, Any]:
     if 'terminal_scale' not in task:
         task['terminal_scale'] = 3.0
 
-    # 默认转角界
     dmax = float(constraints.get('delta_max', 0.5))
     dmin = float(constraints.get('delta_min', -dmax))
 
@@ -78,7 +70,6 @@ def apply_risk(task: Dict[str, Any]) -> Dict[str, Any]:
         obs['radius'] = float(obs.get('radius', 0.35)) + 0.15
         task['horizon'] = int(_clamp(task.get('horizon', 50) + 20, 20, 120))
         task['terminal_scale'] = float(task.get('terminal_scale', 3.0)) * 1.2
-        # tighten steering
         dmax = _clamp(dmax * 0.8, 0.15, 0.6)
         dmin = -dmax
 
@@ -89,96 +80,74 @@ def apply_risk(task: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _apply_goal_bias_and_side(task: Dict[str, Any]) -> Tuple[List[float], List[float], str]:
-    """
-    读取 goal_bias 与 bias.side，返回 (x0, xf_biased, side)
-    """
+    """返回 (x0, xf, side)；支持 goal_bias 与 bias.side"""
     x0 = _pad5(task['start'])
     xf = _pad5(task['goal'])
 
-    # goal_bias: [dx, dy]
     bias = task.get('goal_bias', None)
     if bias and len(bias) >= 2:
-        xf[0] += float(bias[0])
-        xf[1] += float(bias[1])
+        xf[0] += float(bias[0]); xf[1] += float(bias[1])
 
-    # bias.side: 'left' | 'right' | None
     side = None
     if isinstance(task.get('bias'), dict):
         side = str(task['bias'].get('side')).lower() if task['bias'].get('side') else None
-
     return x0, xf, side
 
 
 def build_ocp(task_or_path) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     """
     构建 OCP：
-      - 等式约束：初值 / 动力学离散化
-      - 不等式约束：避障（硬/软/混合）、控制/速度上下界、距离相关限速、前向单调（不回退）
-      - 代价：状态（含终端）、控制、控制变化率、终端速度/转角、终端盒松弛
-    返回：
-      (nlp, meta) 其中 meta 包含 N, nx, nu, obstacle, bounds(lbg, ubg)
+      等式约束：初值/动力学离散化
+      不等式约束：避障、控制/速度界、距离相关限速、不回退、终端硬盒
+      代价：状态（含终端）、控制、控制变化率、终端速度/转角
+    返回 (nlp, meta)
     """
     task = apply_risk(load_task(task_or_path))
 
-    # ===== 权重 =====
+    # 权重
     w_state = _expand_state_weights(task.get('weights', {}).get('state'))
-    w_ctrl = _expand_control_weights(task.get('weights', {}).get('control'))
+    w_ctrl  = _expand_control_weights(task.get('weights', {}).get('control'))
     terminal_scale = float(task.get('terminal_scale', 3.0))
-
-    # 兼容两种命名：terminal_velocity / terminal_vel
     wdict = task.get('weights', {}) or {}
     q_vf = float(wdict.get('terminal_velocity', wdict.get('terminal_vel', 2.0)))
     q_df = float(wdict.get('terminal_steer', 1.0))
-
-    # 控制变化率权重
     u_rate_w = float(task.get('u_rate_weight', 0.0))
 
-    # ===== 模型 & 时间栅格 =====
+    # 模型/时间栅格
     model = AckermannModel()     # X=[x,y,theta,v,delta], U=[a, delta_cmd]
     nx, nu = model.nx, model.nu
+    N  = int(task.get('horizon', 50))
+    dt = float(task.get('dt', 0.1)); dt = _clamp(dt, 0.02, 0.3)
 
-    N = int(task.get('horizon', 50))
-    dt = float(task.get('dt', 0.1))
-    dt = _clamp(dt, 0.02, 0.3)
-
-    # 初末状态（并应用 goal 偏置 + 左/右侧偏中点）
+    # 初末状态与中点引导
     x0, xf, side = _apply_goal_bias_and_side(task)
-
-    # diag 权重
     Q  = ca.diag(ca.DM(w_state))
     R  = ca.diag(ca.DM(w_ctrl))
     Qf = Q * terminal_scale
 
-    # 变量
     X = ca.MX.sym('X', nx, N + 1)
     U = ca.MX.sym('U', nu, N)
 
-    # 约束容器
     g_list: List[ca.MX] = []
     lbg: List[float] = []
     ubg: List[float] = []
-
     obj = 0
 
-    # ===== 初值等式：X0 = x0 =====
-    g_list.append(X[:, 0] - ca.DM(x0))
-    lbg += [0.0] * nx
-    ubg += [0.0] * nx
+    # 初值
+    g_list.append(X[:, 0] - ca.DM(x0)); lbg += [0.0]*nx; ubg += [0.0]*nx
 
-    # ===== 中点引导（Method C），支持 left/right 绕行 =====
+    # via-points（Method C）
     if task.get('insert_midpoint', True):
-        mid = [(x0[0] + xf[0]) / 2.0, (x0[1] + xf[1]) / 2.0, 0.0, 0.0, 0.0]
+        mid = [(x0[0]+xf[0])/2.0, (x0[1]+xf[1])/2.0, 0.0, 0.0, 0.0]
         if side == 'left':
-            mid[0] -= 0.30
-            mid[1] += 0.20
+            mid[0] -= 0.30; mid[1] += 0.20
         elif side == 'right':
-            mid[0] += 0.30
-            mid[1] -= 0.20
+            mid[0] += 0.30; mid[1] -= 0.20
         via_points = [mid, xf]
     else:
         via_points = [xf]
 
-    # ===== 读取 DSL 的机制开关（方案B）=====
+    # 机制开关：距离限速 + 不回退
     scfg = task.get("speed_cap", {}) or {}
     cap_enabled = bool(scfg.get("enabled", False))
     d0    = float(scfg.get("d0", 1.5))
@@ -191,159 +160,102 @@ def build_ocp(task_or_path) -> Tuple[Dict[str, Any], Dict[str, Any]]:
 
     goal_xy = ca.DM(xf[:2])
 
-    # ===== 动力学 & 阶段代价 =====
+    # 动力学 & 阶段代价
     for k in range(N):
-        xk = X[:, k]
-        uk = U[:, k]
-
-        # 离散化
+        xk = X[:, k]; uk = U[:, k]
         x_next = model.forward(xk, uk, dt)
 
-        # 等式：X_{k+1} - f(X_k, U_k) = 0
-        g_list.append(X[:, k + 1] - x_next)
-        lbg += [0.0] * nx
-        ubg += [0.0] * nx
+        g_list.append(X[:, k+1] - x_next); lbg += [0.0]*nx; ubg += [0.0]*nx
 
-        # 参考：前半段跟中点；后半段跟终点
-        ref = via_points[0] if (len(via_points) > 1 and k < N // 2) else via_points[-1]
+        ref = via_points[0] if (len(via_points) > 1 and k < N//2) else via_points[-1]
         ref = ca.DM(ref)
 
-        # 阶段代价： (x-ref)^T Q (x-ref) + u^T R u
         obj += ca.mtimes([(xk - ref).T, Q, (xk - ref)]) + ca.mtimes([uk.T, R, uk])
 
-        # 控制变化率正则
         if u_rate_w > 0 and k >= 1:
-            du = U[:, k] - U[:, k - 1]
+            du = U[:, k] - U[:, k-1]
             obj += u_rate_w * ca.mtimes(du.T, du)
 
-        # -------- 机制1：距离相关限速（仅对 v_k 生效） --------
+        # 距离相关限速（对 v_k）
         if cap_enabled:
             pos_k = xk[0:2]
             d = ca.norm_2(goal_xy - pos_k)
             alpha = ca.fmin(1.0, d / d0)
             v_cap_k = v_near + (v_far - v_near) * alpha
-            g_list.append(xk[3] - v_cap_k)   # xk[3] <= v_cap_k  -> xk[3] - v_cap_k <= 0
-            lbg.append(-ca.inf)
-            ubg.append(0.0)
+            g_list.append(xk[3] - v_cap_k)   # xk[3] <= v_cap_k
+            lbg.append(-ca.inf); ubg.append(0.0)
 
-        # -------- 机制2：不回退（前向单调性约束） --------
+        # 不回退：沿目标方向 (p_{k+1}-p_k)·dir_to_goal >= -eps
         if nb_enabled:
             pos_k  = xk[0:2]
-            pos_k1 = X[0:2, k + 1]
-            vec_to_goal = goal_xy - pos_k
-            dir_goal = vec_to_goal / (1e-6 + ca.norm_2(vec_to_goal))
+            pos_k1 = X[0:2, k+1]
+            dir_goal = (goal_xy - pos_k) / (1e-6 + ca.norm_2(goal_xy - pos_k))
             forward_step = ca.dot(pos_k1 - pos_k, dir_goal)
-            g_list.append(forward_step + eps_back)  # forward_step >= -eps_back
-            lbg.append(0.0)
-            ubg.append(ca.inf)
+            g_list.append(forward_step + eps_back)  # >= 0
+            lbg.append(0.0); ubg.append(ca.inf)
 
-    # ===== 终端代价：位置 + 终端速度/转角抑制 =====
+    # 终端代价（位置 + 终端速度/转角）
     xN = X[:, -1]
     obj += ca.mtimes([(xN - ca.DM(xf)).T, Qf, (xN - ca.DM(xf))])
-    obj += q_vf * (xN[3] ** 2) + q_df * (xN[4] ** 2)
+    obj += q_vf * (xN[3]**2) + q_df * (xN[4]**2)
 
-    # ===== 终端盒约束（带松弛）=====
-    eps_pos = 0.05   # 终端盒尺寸（0.05~0.1 可调）
-    w_box  = 50.0    # 终端盒松弛的权重
-    w_vT   = 10.0    # 终端速度权重（补强）
-    w_dT   = 5.0     # 终端转角权重（补强）
-
-    sx = ca.MX.sym('sx')  # 终端 x 盒松弛
-    sy = ca.MX.sym('sy')  # 终端 y 盒松弛
-
-    # |x_N - x_f| <= eps + sx, |y_N - y_f| <= eps + sy
+    # 终端盒：硬约束（必须进入 ±eps_pos）
+    eps_pos = float(task.get('terminal_box', {}).get('half_sizes', [0.05, 0.05])[0])
+    eps_pos = _clamp(eps_pos, 0.03, 0.20)  # 安全夹取
     g_list += [
-        (X[0, -1] - xf[0]) - (eps_pos + sx),
-        -(X[0, -1] - xf[0]) - (eps_pos + sx),
-        (X[1, -1] - xf[1]) - (eps_pos + sy),
-        -(X[1, -1] - xf[1]) - (eps_pos + sy),
+        (X[0, -1] - xf[0]) - eps_pos,
+        -(X[0, -1] - xf[0]) - eps_pos,
+        (X[1, -1] - xf[1]) - eps_pos,
+        -(X[1, -1] - xf[1]) - eps_pos,
     ]
     lbg += [-ca.inf, -ca.inf, -ca.inf, -ca.inf]
     ubg += [0.0, 0.0, 0.0, 0.0]
 
-    # sx, sy >= 0
-    g_list += [sx, sy]
-    lbg += [0.0, 0.0]
-    ubg += [ca.inf, ca.inf]
-
-    # 终端附加代价（更强到点 + 停车）
-    obj += w_box * (sx + sy) + w_vT * (X[3, -1] ** 2) + w_dT * (X[4, -1] ** 2)
-
-    # ===== 避障：硬/软/混合 =====
+    # 避障：硬/软/混合
     obs = task.get('obstacle', None)
     if obs:
-        cx = float(obs['center'][0])
-        cy = float(obs['center'][1])
-        r = float(obs['radius'])
-        r2 = r * r
-
+        cx = float(obs['center'][0]); cy = float(obs['center'][1])
+        r = float(obs['radius']); r2 = r * r
         shield_cfg = task.get('shield', {}) or {}
-        mode = str(shield_cfg.get('mode', 'hard')).lower()  # 'hard' | 'soft' | 'hybrid'
+        mode = str(shield_cfg.get('mode', 'hard')).lower()
         soft_w = float(shield_cfg.get('weight', 8.0))
-
         use_hard = mode in ['hard', 'hybrid']
         use_soft = mode in ['soft', 'hybrid']
-
         for k in range(N + 1):
-            dx = X[0, k] - cx
-            dy = X[1, k] - cy
-            dist2 = dx * dx + dy * dy
+            dx = X[0, k] - cx; dy = X[1, k] - cy; dist2 = dx*dx + dy*dy
             if use_hard:
-                # dist^2 - r^2 >= 0
-                g_list.append(dist2 - r2)
-                lbg.append(0.0)
-                ubg.append(float('inf'))
+                g_list.append(dist2 - r2); lbg.append(0.0); ubg.append(float('inf'))
             if use_soft:
                 obj += soft_barrier(dist2, r2, w=soft_w)
 
-    # ===== 控制上下界：umin <= u <= umax =====
+    # 控制上下界
     cons = task.get('constraints', {}) or {}
-    a_min = float(cons.get('a_min', -1.0))
-    a_max = float(cons.get('a_max',  +1.0))
-    d_min = float(cons.get('delta_min', -0.5))
-    d_max = float(cons.get('delta_max',  +0.5))
+    a_min = float(cons.get('a_min', -1.0)); a_max = float(cons.get('a_max', +1.0))
+    d_min = float(cons.get('delta_min', -0.5)); d_max = float(cons.get('delta_max', +0.5))
 
-    umin = ca.DM([a_min, d_min])
-    umax = ca.DM([a_max, d_max])
+    umin = ca.DM([a_min, d_min]); umax = ca.DM([a_max, d_max])
     for k in range(N):
-        # u - umin >= 0
-        g_list.append(U[:, k] - umin)
-        lbg += [0.0] * nu
-        ubg += [float('inf')] * nu
-        # umax - u >= 0
-        g_list.append(umax - U[:, k])
-        lbg += [0.0] * nu
-        ubg += [float('inf')] * nu
+        g_list.append(U[:, k] - umin); lbg += [0.0]*nu; ubg += [float('inf')]*nu
+        g_list.append(umax - U[:, k]); lbg += [0.0]*nu; ubg += [float('inf')]*nu
 
-    # ===== 速度上下界（如果在 DSL constraints 里给了 v_min/v_max）=====
-    v_min = cons.get('v_min', None)
-    v_max = cons.get('v_max', None)
+    # 速度上下界（若提供）
+    v_min = cons.get('v_min', None); v_max = cons.get('v_max', None)
     if v_min is not None:
-        v_min = float(v_min)
+        vmin = float(v_min)
         for k in range(N + 1):
-            g_list.append(X[3, k] - v_min)  # X[3] >= v_min
-            lbg.append(0.0)
-            ubg.append(float('inf'))
+            g_list.append(X[3, k] - vmin); lbg.append(0.0); ubg.append(float('inf'))
     if v_max is not None:
-        v_max = float(v_max)
+        vmax = float(v_max)
         for k in range(N + 1):
-            g_list.append(v_max - X[3, k])  # X[3] <= v_max
-            lbg.append(0.0)
-            ubg.append(float('inf'))
+            g_list.append(vmax - X[3, k]); lbg.append(0.0); ubg.append(float('inf'))
 
-    # ===== 打包 NLP（把 sx, sy 作为变量拼上）=====
-    vars_ = ca.vertcat(
-        ca.reshape(X, -1, 1),
-        ca.reshape(U, -1, 1),
-        sx, sy
-    )
+    # 打包 NLP
+    vars_ = ca.vertcat(ca.reshape(X, -1, 1), ca.reshape(U, -1, 1))
     g = ca.vertcat(*g_list)
     nlp = {'x': vars_, 'f': obj, 'g': g}
 
     meta = {
-        'N': N,
-        'nx': nx,
-        'nu': nu,
+        'N': N, 'nx': nx, 'nu': nu,
         'obstacle': obs,
         'bounds': {'lbg': lbg, 'ubg': ubg},
     }

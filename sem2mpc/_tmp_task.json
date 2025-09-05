@@ -24,11 +24,11 @@
       0.1
     ],
     "control": [
-      0.025,
-      0.025
+      0.034999999999999996,
+      0.034999999999999996
     ]
   },
-  "terminal_scale": 3.0,
+  "terminal_scale": 4.5,
   "constraints": {
     "a_min": -1.0,
     "a_max": 1.0,
@@ -40,7 +40,7 @@
       1.2,
       0.5
     ],
-    "radius": 0.45
+    "radius": 0.75
   },
   "risk": "med",
   "shield": {

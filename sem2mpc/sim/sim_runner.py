@@ -1,4 +1,14 @@
 # -*- coding: utf-8 -*-
+"""
+SafeTalk-MPC - simulation runner
+
+功能：
+- 读取 DSL(JSON) -> 调用 build_ocp 构建 NLP
+- 自动根据 nlp['x'] 的真实长度构造初值（兼容新增 slack 变量）
+- 求解并绘图/动画，保存指标
+- （可选）用 LLM 将自然语言指令编译为 DSL 增量修改（支持 ollama 单/多模型）
+"""
+
 import os
 import sys
 import json
@@ -40,6 +50,9 @@ def _load_json(path):
         return json.load(f)
 
 def _save_json(obj, path):
+    d = os.path.dirname(path)
+    if d and not os.path.isdir(d):
+        os.makedirs(d, exist_ok=True)
     with open(path, 'w', encoding='utf-8') as f:
         json.dump(obj, f, ensure_ascii=False, indent=2)
 
@@ -58,7 +71,7 @@ def _ensure_meta(nlp, meta):
         if 'bounds' not in meta or 'lbg' not in meta['bounds'] or 'ubg' not in meta['bounds']:
             ng = int(nlp['g'].size1())
             meta.setdefault('bounds', {})
-            # ⚠️ 兜底策略：假定构造的约束为 “g >= 0”（常见：动力学等式拆分已经在 OCP 内完成）
+            # ⚠️ 兜底策略：假定构造的约束为 “g >= 0”
             meta['bounds']['lbg'] = [0.0] * ng
             meta['bounds']['ubg'] = [1e9] * ng
         return meta
@@ -112,7 +125,6 @@ def _make_single_provider(model, base_url, temperature, num_predict, seed, save_
         return None
 
     sig = inspect.signature(_mk_single_provider)
-    params = {k: v.kind for k, v in sig.parameters.items()}
     kwargs = {"model": model, "base_url": base_url}
 
     # 优先尝试新版参数
@@ -197,20 +209,31 @@ def solve_and_plot(task_json_path, out_prefix='mpc'):
     lbg, ubg = meta['bounds']['lbg'], meta['bounds']['ubg']
 
     # IPOPT 设置
-    solver_opts = {
+    solver = ca.nlpsol('solver', 'ipopt', nlp, {
         'ipopt.print_level': 0,
         'print_time': 0,
         'ipopt.max_iter': 400,
         'ipopt.tol': 1e-6
-    }
-    solver = ca.nlpsol('solver', 'ipopt', nlp, solver_opts)
+    })
 
-    # 初值
+    # ====== 关键修复：根据 nlp['x'] 的真实长度来构造初值 ======
+    n_dec = int(nlp['x'].size1())               # 决策变量总长度
+    base_len = nx * (N + 1) + nu * N            # 只包含 X,U 时的长度
+    extra = n_dec - base_len                     # 新增的变量个数（比如 sx, sy -> 2）
+
+    if extra < 0:
+        raise RuntimeError(f"Internal error: decision size smaller than X/U block. n_dec={n_dec}, base_len={base_len}")
+
+    # 先按老方式构造 X,U 的初值
     x_init = ca.DM.zeros((nx, N + 1))
     u_init = ca.DM.zeros((nu, N))
     init_guess = ca.vertcat(ca.reshape(x_init, -1, 1), ca.reshape(u_init, -1, 1))
 
-    # 求解
+    # 若有新增变量（如 sx, sy），再补 0
+    if extra > 0:
+        init_guess = ca.vertcat(init_guess, ca.DM.zeros(extra, 1))
+    # ====== 修复结束 ======
+
     print('🚀 Solving MPC...')
     t0 = time.time()
     sol = solver(x0=init_guess, lbg=lbg, ubg=ubg)

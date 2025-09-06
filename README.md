@@ -53,14 +53,13 @@ pip install -r requirements.txt
 bash
 复制代码
 python -m sim.sim_runner dsl/example_task_curve_01.json --out exp/base --llm none
-输出：
+会生成：
 
-exp/base_result.png → 静态轨迹图
-
-exp/base_anim.mp4 → 轨迹动画
-
-exp/base_metrics.json → 指标（末端误差、最小障碍距离、求解时间等）
-
+bash
+复制代码
+exp/base_result.png      # 静态轨迹图
+exp/base_anim.mp4        # 轨迹动画
+exp/base_metrics.json    # 指标（末端误差、最小障碍距离、求解时间等）
 3. 使用自然语言修改任务
 powershell
 复制代码
@@ -69,29 +68,28 @@ $instr = @'
 绕障更保守，把安全半径加到 0.6 米
 '@
 python -m sim.sim_runner dsl/base.json $instr --llm ollama --model qwen2.5:7b --out exp/E1 --save-llm
-会自动生成：
+会生成：
 
-last_patch.json → JSON Patch
-
-_tmp_task.json → 应用后的 DSL
-
+pgsql
+复制代码
+last_patch.json   # JSON Patch
+_tmp_task.json    # 应用后的 DSL
 轨迹图 & 动画
-
 🧪 实验与复现
-我们设计了 对照实验，验证语义编译器与手工 JSON Patch 一致：
+我们设计了对照实验，验证语义编译器与手工 JSON Patch 一致：
 
 编号	自然语言指令 (LLM)	手工补丁 JSON	预期变化
-E1	“绕障更保守，把安全半径改为 0.6 米”	{"obstacle":{"radius":0.6}}	min_obstacle_distance ↑
-E2	“更强调平滑控制，把 u_rate_weight 提高到 1.0”	{"u_rate_weight":1.0}	控制更平滑，end_err ↑
-E3	“更靠近目标点停车，把 terminal_velocity 罚权提到 60”	{"weights":{"terminal_velocity":60}}	停车更稳，end_err ↓
-E4	“缩短预测步长到 120”	{"horizon":120}	solve_time_sec ↓
-E5	“启用中点引导，让路径更圆滑”	{"insert_midpoint":true}	避障姿态改变
-E6	“靠近目标更慢：v_near=0.18，v_far=1.0”	{"speed_cap":{"v_near":0.18,"v_far":1.0}}	末端更慢，更平滑
+E1	绕障更保守，把安全半径改为 0.6 米	{"obstacle":{"radius":0.6}}	min_obstacle_distance ↑
+E2	更强调平滑控制，把 u_rate_weight 提高到 1.0	{"u_rate_weight":1.0}	控制更平滑，end_err ↑
+E3	更靠近目标点停车，把 terminal_velocity 罚权提到 60	{"weights":{"terminal_velocity":60}}	停车更稳，end_err ↓
+E4	缩短预测步长到 120	{"horizon":120}	solve_time_sec ↓
+E5	启用中点引导，让路径更圆滑	{"insert_midpoint":true}	避障姿态改变
+E6	靠近目标更慢：v_near=0.18，v_far=1.0	{"speed_cap":{"v_near":0.18,"v_far":1.0}}	末端更慢，更平滑
 
-通过对比 metrics.json（end_err / min_obstacle_distance / solve_time_sec）和 轨迹动画，可以直观看到自然语言控制的效果。
+通过对比 metrics.json（end_err / min_obstacle_distance / solve_time_sec）和轨迹动画，可以直观看到自然语言控制的效果。
 
 📂 目录结构
-csharp
+plaintext
 复制代码
 SafeTalk-MPC/
 ├── sem2mpc/                  # 核心代码

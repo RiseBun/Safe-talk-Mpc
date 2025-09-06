@@ -1,0 +1,40 @@
+[
+  {
+    "op": "add",
+    "path": "/mpc/terminal_box",
+    "value": {
+      "enabled": true,
+      "half_sizes": [0.06, 0.06]
+    }
+  },
+  {
+    "op": "add",
+    "path": "/mpc/weights/terminal_velocity",
+    "value": 8.0
+  },
+  {
+    "op": "add",
+    "path": "/mpc/weights/terminal_steer",
+    "value": 2.0
+  },
+  {
+    "op": "add",
+    "path": "/mpc/u_rate_weight",
+    "value": 0.20
+  },
+  {
+    "op": "add",
+    "path": "/mpc/terminal_scale",
+    "value": 0.55
+  },
+  {
+    "op": "add",
+    "path": "/mpc/horizon",
+    "value": 28
+  },
+  {
+    "op": "add",
+    "path": "/mpc/dt",
+    "value": 0.08
+  }
+]

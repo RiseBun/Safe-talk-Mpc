@@ -3,18 +3,18 @@ import json
 import os
 from typing import Any, Dict, List
 
-# -------------------------
-# Helpers
-# -------------------------
-
 def _is_path(s: str) -> bool:
+    """把 .json 结尾或含路径分隔符的字符串当作路径看待"""
     if not isinstance(s, str):
         return False
-    return any(sep in s for sep in ['/', '\\']) or s.endswith('.json')
+    s2 = s.strip().strip('\"').strip("'")
+    return s2.lower().endswith('.json') or ('/' in s2) or ('\\' in s2)
 
 def _load_json_from_path(path: str) -> Any:
-    with open(path, 'r', encoding='utf-8') as f:
+    # 兼容 UTF-8 带 BOM
+    with open(path, 'r', encoding='utf-8-sig') as f:
         return json.load(f)
+
 
 def _try_parse_json_string(s: str) -> Any:
     try:
@@ -34,26 +34,24 @@ def _deep_merge(dst: Dict[str, Any], src: Dict[str, Any]) -> Dict[str, Any]:
             dst[k] = v
     return dst
 
-# -------------------------
-# Public merge APIs
-# -------------------------
-
 def merge(dst: Dict[str, Any], src: Any) -> Dict[str, Any]:
-    """
-    合并补丁：
-      - src 是 dict：直接合并
-      - src 是 str：若像路径→读文件；否则按 JSON 字符串解析
-    """
+    """合并补丁：dict / JSON 字符串 / 文件路径"""
     if isinstance(src, dict):
         return _deep_merge(dst, src)
 
     if isinstance(src, str):
-        if _is_path(src) and os.path.exists(src):
-            obj = _load_json_from_path(src)
+        s = src.strip().strip('\"').strip("'")
+        if _is_path(s):
+            # 即使存在性检测失败也先尝试打开，再报错
+            try:
+                obj = _load_json_from_path(s)
+            except FileNotFoundError:
+                abs_try = os.path.abspath(s)
+                obj = _load_json_from_path(abs_try)  # 二次尝试
             if not isinstance(obj, dict):
-                raise TypeError(f"Patch file {src!r} must contain a JSON object, got {type(obj)}")
+                raise TypeError(f"Patch file {s!r} must contain a JSON object, got {type(obj)}")
             return _deep_merge(dst, obj)
-        obj = _try_parse_json_string(src)
+        obj = _try_parse_json_string(s)
         if not isinstance(obj, dict):
             raise TypeError(f"Patch must be a JSON object after parsing string, got {type(obj)}")
         return _deep_merge(dst, obj)
@@ -61,12 +59,9 @@ def merge(dst: Dict[str, Any], src: Any) -> Dict[str, Any]:
     raise TypeError(f"Patch must be a JSON object or JSON string or file path, got {type(src)}")
 
 def apply_patch(task: Any, patch: Any) -> Dict[str, Any]:
-    """
-    兼容旧接口：task 可为 dict/路径/JSON字符串；patch 同 merge 支持的三类。
-    返回新对象（不改原对象）。
-    """
-    base = load_task(task)  # 关键：先把 task 统一解析为 dict
-    base_copy = json.loads(json.dumps(base))  # 深拷贝
+    """兼容旧接口：task 可为 dict/路径/JSON 字符串；patch 同上。"""
+    base = load_task(task)
+    base_copy = json.loads(json.dumps(base))
     return merge(base_copy, patch)
 
 def apply_patches(task: Any, patches: List[Any]) -> Dict[str, Any]:
@@ -76,28 +71,28 @@ def apply_patches(task: Any, patches: List[Any]) -> Dict[str, Any]:
         cur = merge(cur, p)
     return cur
 
-# -------------------------
-# Task loader
-# -------------------------
-
 def load_task(task_or_path: Any) -> Dict[str, Any]:
-    """
-    读任务 JSON 或对象；支持可选 'base' 合并：
-      { "base": "path/to/base.json", ...overrides... }
-    """
+    """读任务 JSON 或对象；支持可选 'base' 合并"""
     if isinstance(task_or_path, dict):
         user = task_or_path
     elif isinstance(task_or_path, str):
-        if _is_path(task_or_path) and os.path.exists(task_or_path):
-            user = _load_json_from_path(task_or_path)
+        s = task_or_path.strip().strip('\"').strip("'")
+        if _is_path(s):
+            # 优先当文件打开（相对/绝对都尝试）
+            try:
+                user = _load_json_from_path(s)
+            except FileNotFoundError:
+                abs_try = os.path.abspath(s)
+                user = _load_json_from_path(abs_try)
         else:
-            user = _try_parse_json_string(task_or_path)
+            user = _try_parse_json_string(s)
     else:
         raise TypeError(f"Task must be a dict, JSON string, or path, got {type(task_or_path)}")
 
     if not isinstance(user, dict):
         raise TypeError(f"Task must be a JSON object, got {type(user)}")
 
+    # 处理 base
     base = user.get('base') or user.get('_base')
     if base:
         if isinstance(base, str):

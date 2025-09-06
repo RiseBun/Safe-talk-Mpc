@@ -1,18 +1,4 @@
 {
-  "start": [
-    0,
-    0,
-    0,
-    0,
-    0
-  ],
-  "goal": [
-    2.0,
-    1.0,
-    0,
-    0,
-    0
-  ],
   "insert_midpoint": false,
   "no_backtrack": {
     "enabled": true,
@@ -58,16 +44,30 @@
     "v_min": 0.0,
     "v_max": 0.9
   },
-  "obstacle": {
-    "center": [
-      1.2,
-      0.5
-    ],
-    "radius": 0.6
-  },
   "risk": "med",
   "shield": {
     "mode": "hybrid",
     "weight": 8.0
+  },
+  "start": [
+    0.0,
+    0.2,
+    0.0,
+    0.0,
+    0.0
+  ],
+  "goal": [
+    2.0,
+    1.0,
+    0.0,
+    0.0,
+    0.0
+  ],
+  "obstacle": {
+    "center": [
+      1.1,
+      0.55
+    ],
+    "radius": 0.4
   }
 }

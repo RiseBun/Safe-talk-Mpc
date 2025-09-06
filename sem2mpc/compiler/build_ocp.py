@@ -4,7 +4,7 @@ from typing import Dict, Any, Tuple, List
 
 from compiler.ackermann_model import AckermannModel
 from compiler.load_task import load_task
-from compiler.shield import soft_barrier
+from compiler.shield import soft_barrier  # 已包含在 shield.py 中
 
 
 def _clamp(x: float, lo: float, hi: float) -> float:
@@ -97,10 +97,9 @@ def _apply_goal_bias_and_side(task: Dict[str, Any]) -> Tuple[List[float], List[f
 def build_ocp(task_or_path) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     """
     构建 OCP：
-      等式约束：初值/动力学离散化
-      不等式约束：避障、控制/速度界、距离相关限速、不回退、终端硬盒
+      等式：初值/动力学
+      不等式：避障、控制/速度界、距离限速、不回退、终端硬盒
       代价：状态（含终端）、控制、控制变化率、终端速度/转角
-    返回 (nlp, meta)
     """
     task = apply_risk(load_task(task_or_path))
 
@@ -201,7 +200,7 @@ def build_ocp(task_or_path) -> Tuple[Dict[str, Any], Dict[str, Any]]:
 
     # 终端盒：硬约束（必须进入 ±eps_pos）
     eps_pos = float(task.get('terminal_box', {}).get('half_sizes', [0.05, 0.05])[0])
-    eps_pos = _clamp(eps_pos, 0.03, 0.20)  # 安全夹取
+    eps_pos = _clamp(eps_pos, 0.03, 0.20)
     g_list += [
         (X[0, -1] - xf[0]) - eps_pos,
         -(X[0, -1] - xf[0]) - eps_pos,
